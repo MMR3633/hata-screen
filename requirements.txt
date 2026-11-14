@@ -1,0 +1,2 @@
+aiohttp
+playwright==1.65.1
