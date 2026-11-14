@@ -229,7 +229,8 @@ def make_app(token, allowed):
             await screen.ensure()
         except Exception as e:
             log.exception("браузер не запустился")
-            await ws.send_json({"t": "error", "text": f"Браузер не запустился: {type(e).__name__}"})
+            await ws.send_json({"t": "error", "text": f"Браузер не запустился: {type(e).__name__}",
+                                "detail": str(e)[:1500]})
             await ws.close()
             return ws
         screen.clients[ws] = uid
@@ -254,6 +255,20 @@ def make_app(token, allowed):
             await screen.broadcast({"t": "viewers", "uids": sorted(set(screen.clients.values()))})
         return ws
 
+    async def diag(request):
+        if auth.read_session(request.query.get("t", ""), token, allowed) is None:
+            raise web.HTTPUnauthorized()
+        import platform
+        import shutil
+        import sys
+        info = {"python": sys.version, "platform": platform.platform(), "uid": os.getuid() if hasattr(os, "getuid") else None,
+                "apt": bool(shutil.which("apt-get")), "browsers_path": os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "")}
+        try:
+            info["chromium"] = screen.pw.chromium.executable_path if screen.pw else None
+        except Exception as e:
+            info["chromium"] = repr(e)
+        return web.json_response(info)
+
     async def health(request):
         return web.json_response({"ok": True, "browser": screen.page is not None, "viewers": len(screen.clients)})
 
@@ -271,6 +286,7 @@ def make_app(token, allowed):
     app["screen"] = screen
     app.router.add_get("/ws", ws_handler)
     app.router.add_get("/health", health)
+    app.router.add_get("/diag", diag)
     async def on_stop(app):
         app["reaper"].cancel()
         app["urlwatch"].cancel()
