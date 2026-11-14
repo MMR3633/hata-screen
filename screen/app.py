@@ -46,6 +46,7 @@ class Screen:
         self.lock = asyncio.Lock()
         self.last_seen = time.time()
         self.frame = None
+        self.sending = set()
 
     @property
     def size(self):
@@ -85,8 +86,9 @@ class Screen:
     async def _start_cast(self):
         w, h = self.size["width"], self.size["height"]
         scale = 2 if self.mode == "phone" else 1
+        # каждый второй кадр: около 15 в секунду, чтобы тянул мобильный интернет
         await self.cdp.send("Page.startScreencast", {"format": "jpeg", "quality": 55,
-                                                     "maxWidth": w * scale, "maxHeight": h * scale, "everyNthFrame": 1})
+                                                     "maxWidth": w * scale, "maxHeight": h * scale, "everyNthFrame": 2})
 
     async def _adopt_popup(self, popup):
         # новые вкладки открываем в той же общей странице
@@ -102,11 +104,18 @@ class Screen:
             return
         self.frame = base64.b64decode(e["data"])
         for ws in list(self.clients):
-            if not ws.closed:
-                try:
-                    await ws.send_bytes(self.frame)
-                except (ConnectionError, RuntimeError):
-                    pass
+            # медленному зрителю пропускаем кадр, чтобы он не тормозил второго
+            if not ws.closed and ws not in self.sending:
+                asyncio.create_task(self._send_frame(ws, self.frame))
+
+    async def _send_frame(self, ws, frame):
+        self.sending.add(ws)
+        try:
+            await ws.send_bytes(frame)
+        except (ConnectionError, RuntimeError):
+            pass
+        finally:
+            self.sending.discard(ws)
 
     async def push_nav(self):
         try:
